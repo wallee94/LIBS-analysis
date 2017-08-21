@@ -1,0 +1,17 @@
+{
+    "file":"AvaSpec_Al_UV_new.txt",
+    "elements_from_NIST": ["Al I"],
+    "elements_from_file": {
+        "Al II" : "Al-II_wallee.txt"
+    },
+    "analysis_options": {
+        "wavelength_min": 200,
+        "wavelength_max": 1000,
+        "adjust_manually": true,
+        "minimal_separation_between_maximum": 2,
+        "iterations": 2,
+        "intensity_detection_umbral": 200,
+        "spectra_output_file": "spectra_output.txt",
+        "maximum_output_file": "maximum_output.txt"
+    }
+}
