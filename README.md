@@ -4,7 +4,7 @@ This library is NOT completed yet. It can be used to fit lorentzian functions to
 
 ## Instructions
 
-First, yo should install the requirements:
+You should start installing the requirements:
 
     pip install -r requirements.txt
 
