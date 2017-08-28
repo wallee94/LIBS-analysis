@@ -4,7 +4,7 @@ from pprint import pprint
 
 import numpy as np
 import requests
-from bokeh.plotting import figure, output_file, show
+import matplotlib.pyplot as plt
 from bs4 import BeautifulSoup
 
 class Analysis:
@@ -51,7 +51,7 @@ class Analysis:
             if "wavelength_min" in self.analysis_options or "wavelength_max" in self.analysis_options:
                 self.limit_wavelengths()
 
-            # .. more options
+                # .. more options
 
     def limit_wavelengths(self):
         if "wavelength_min" not in self.analysis_options:
@@ -129,20 +129,32 @@ class Analysis:
         return float(res)
 
     def plot_result(self):
-        # output to static HTML file
-        output_file("lines.html")
-        # create a new plot with a title and axis labels
-        p = figure(title="Experiment", x_axis_label='Wavelength (nm)', y_axis_label='Intensity', plot_width=1000)
-        # add a line renderer with legend and line thickness
-        p.line(self.lambdas, self.intensities, legend=self.params.get("file"), line_width=2)
+        # Create Figure (empty canvas)
+        fig = plt.figure()
+
+        # Add set of axes to figure
+        ax1 = fig.add_subplot(211)
+
+        res = self.params.get("result", {"resolution": 5}).get("resolution", 5) # times the original resolution
+        x = np.linspace(self.lambdas[0], self.lambdas[-1], len(self.lambdas)*res)
+        y_total = np.zeros(len(self.lambdas)*res)
 
         for lorentzian_function in self.lorentzian_functions:
             func_center = lorentzian_function["wavelength"]
-            x = np.linspace(func_center - 5, func_center + 5, 1000)
-            y = lorentzian_function["intensity"] / (( (func_center - x)/lorentzian_function["gamma"] )**2 + 1)
-            p.line(x, y, line_width=1, color="green")
-        # show the results
-        show(p)
+            y = lorentzian_function["intensity"] / (((func_center - x) / lorentzian_function["gamma"]) ** 2 + 1)
+            y_total += y
+            ax1.plot(x, y, 'g')
+        ax1.plot(x, y_total, ':b')
+
+        # Plot on that set of axes
+        ax1.set_title('Result')
+
+        ax2 = fig.add_subplot(212, sharex=ax1, sharey=ax1)
+        ax2.plot(self.lambdas, self.intensities, 'b')
+        ax2.set_xlabel('Wavelength (nm)')
+        ax2.set_ylabel('Intensity')
+
+        plt.show()
 
     def _find_lorentzian_functions(self):
 
@@ -164,6 +176,46 @@ class Analysis:
                         "gamma": None
                     }
                     self.lorentzian_functions.append(lorentzian_function)
+
+        # edit maximum found
+        self.fig = plt.figure()
+        self.axes = self.fig.add_subplot(211)
+        self.axes.set_ylabel("Intenisity")
+        self.axes.set_title("Maximum found")
+        self.axes.plot(self.lambdas, self.intensities, ':og', picker=5, markersize=3)
+
+        self.maximum_lines_added  = {}
+        for maximum_found in self.lorentzian_functions:
+            self.maximum_lines_added[maximum_found['index']] = self.axes.stem((maximum_found['wavelength'],), (maximum_found['intensity'],))
+
+        # plot elements
+        elements_axes = self.fig.add_subplot(212, sharex=self.axes, sharey=self.axes)
+        elements_axes.set_xlabel("Wavelength (nm)")
+        elements_axes.set_title("Elements database")
+        max_intensity = max(self.intensities)
+        min_wavelength = min(self.lambdas)
+        max_wavelength = max(self.lambdas)
+        for element in self.elements:
+            wavelengths = []
+            intensities = []
+            for data in self.elements[element]:
+                owa = data.get("observed_wavelength_air")
+                rel_int = data.get("relative_intensity")
+                if owa and rel_int:
+                    if min_wavelength < owa < max_wavelength:
+                        wavelengths.append(data.get("observed_wavelength_air"))
+                        intensities.append(data.get("relative_intensity"))
+            if intensities:
+                max_local_intensity = max(intensities)
+                intensities = np.array(intensities)/max_local_intensity*max_intensity
+
+                intensities_tmp = intensities[intensities > self.params['analysis_options'].get('elements_min_intensity', 0)]
+                wavelengths = np.array(wavelengths)[intensities > self.params['analysis_options'].get('elements_min_intensity', 0)]
+                elements_axes.stem(wavelengths, intensities_tmp, ':b')
+
+        self.fig.canvas.mpl_connect('pick_event', self._remove_or_add_lines_onpick)
+
+        plt.show()
 
         # adjust a gamma value
         for i, lorentzian_function in enumerate(self.lorentzian_functions):
@@ -191,7 +243,8 @@ class Analysis:
         coeff = self._calculate_coefficients()
         for _ in range(self.analysis_options["iterations"] - 1):
             coeff[np.isnan(coeff)] = 1
-            self.lorentzian_functions = [self.lorentzian_functions[i] for i in range(len(self.lorentzian_functions)) if 0 <= coeff[i] <= 1]
+            self.lorentzian_functions = [self.lorentzian_functions[i] for i in range(len(self.lorentzian_functions)) if
+                                         0 <= coeff[i] <= 1]
             coeff = self._calculate_coefficients()
 
         for i in range(len(self.lorentzian_functions)):
@@ -202,17 +255,56 @@ class Analysis:
         b = []
         l = len(self.lorentzian_functions)
         for lorentzian_function in self.lorentzian_functions:
-            A.append([self._calculate_functions_value_in_x0(self.lorentzian_functions[j], lorentzian_function["wavelength"]) for j in range(l)])
+            A.append(
+                [self._calculate_functions_value_in_x0(self.lorentzian_functions[j], lorentzian_function["wavelength"])
+                 for j in range(l)])
             b.append(lorentzian_function["intensity"])
         coeff = np.linalg.solve(A, b)
         return coeff
 
+    def _remove_or_add_lines_onpick(self, event):
+        ind = event.ind[0]
+        if ind in self.maximum_lines_added:
+            for line in self.maximum_lines_added[ind]:
+                # if line is an array or tuple, iterate and remove all lines inside
+                if hasattr(line, '__iter__'):
+                    for l in line:
+                        self.axes.lines.remove(l)
+                else:
+                    self.axes.lines.remove(line)
+
+            # update maximum_lines_added
+            self.maximum_lines_added.pop(ind)
+
+            # erase from list of lorentzian functions found
+            for i, lorentzian in enumerate(self.lorentzian_functions):
+                if lorentzian['index'] == ind:
+                    self.lorentzian_functions.pop(i)
+                    break
+
+        else:
+            lorentzian_function = {
+                "wavelength": self.lambdas[ind],
+                "intensity": self.intensities[ind],
+                "index": ind,
+                "gamma": None
+            }
+            # add to lorentzian functions list
+            self.lorentzian_functions.append(lorentzian_function)
+
+            # update maximum_lines_added
+            self.maximum_lines_added[ind] = self.axes.stem((lorentzian_function['wavelength'],), (lorentzian_function['intensity'],))
+
+        # update plot
+        self.fig.canvas.draw()
+
     def _calculate_functions_value_in_x0(self, lorentzian_function, x0):
-        value = lorentzian_function["intensity"] / (( (lorentzian_function['wavelength'] - x0)/lorentzian_function["gamma"] )**2 + 1)
+        value = lorentzian_function["intensity"] / (
+        ((lorentzian_function['wavelength'] - x0) / lorentzian_function["gamma"]) ** 2 + 1)
         return round(value, 4)
 
     def run_analysis(self):
-        init  = time.time()
+        init = time.time()
         print("\nStarting analysis...\n")
         intensity_min = min([intensity for intensity in self.intensities if intensity >= 0])
         self.intensities = [intensity - intensity_min for intensity in self.intensities]
@@ -221,8 +313,8 @@ class Analysis:
 
         self.plot_result()
 
-        print("Analyis done in %f sec \n" % (time.time() - init))
         print("%d lorentzian functions found" % len(self.lorentzian_functions))
+
 
 if __name__ == "__main__":
     analysis = Analysis("params.txt")
